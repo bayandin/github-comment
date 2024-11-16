@@ -1,0 +1,17 @@
+name: 'GitHub Comment'
+description: 'Add a comment to a GitHub PR'
+inputs:
+  message:
+    description: 'Message to add to the PR comment'
+    required: true
+  neon-db-url:
+    description: 'Neon Database connection URL'
+    required: true
+  github-token:
+    description: 'GitHub token'
+    required: true
+    default: ${{ github.token }}
+
+runs:
+  using: 'node20'
+  main: 'index.js'
