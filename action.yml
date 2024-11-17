@@ -11,7 +11,10 @@ inputs:
     description: 'GitHub token'
     required: true
     default: ${{ github.token }}
+  matrix:
+    description: 'Matrix parameters as JSON object'
+    required: false
 
 runs:
   using: 'node20'
-  main: 'index.js'
+  main: 'dist/index.js'

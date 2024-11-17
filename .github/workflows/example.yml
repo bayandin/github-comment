@@ -1,0 +1,40 @@
+name: Parallel Comments Example
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  parallel-comments:
+    permissions:
+      pull-requests: write
+
+    strategy:
+      matrix:
+        test-number: [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 ]
+        runs-on: [ ubuntu-latest ]
+      fail-fast: false
+
+    runs-on: ${{ matrix.runs-on }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: fail randomly
+        run: |
+          if [ $(($RANDOM % 10)) -eq 4 ]; then
+            exit 1
+          fi
+
+      - name: Comment PR
+        if: ${{ !cancelled() }}
+        # continue-on-error: true
+        uses: ./
+        with:
+          neon-db-url: ${{ secrets.NEON_CONNSTR }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          matrix: ${{ toJSON(matrix) }}
+          message: |
+            Test #${{ matrix.test-number }} on ${{ matrix.runs-on }}
+            Status: ${{ job.status }}
