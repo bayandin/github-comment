@@ -1,6 +1,6 @@
 const core = require('@actions/core');
 const github = require('@actions/github');
-const { neon } = require('@neondatabase/serverless');
+const { Client } = require('pg');
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second
@@ -38,7 +38,10 @@ function generateSource(context, matrixInput) {
 
 async function processWithRetry(params) {
   const { context, github, dbUrl, message, matrix } = params;
-  const sql = neon(dbUrl);
+  const client = new Client({
+    connectionString: dbUrl,
+  });
+
   const prNumber = context.payload.pull_request.number;
   const commitSha = context.payload.pull_request.head.sha;
   const runId = context.runId;
@@ -47,27 +50,19 @@ async function processWithRetry(params) {
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      await sql.transaction([
-        sql`SET lock_timeout = '10s'`,
-        sql`SET statement_timeout = '5s'`,
+      await client.connect();
 
-        // Try to acquire lock with timeout
-        sql`
-          SELECT 1
-          FROM pr_comments
-          WHERE pr_number = ${prNumber}
-          FOR UPDATE NOWAIT
-        `,
+      try {
+        await client.query('BEGIN');
 
-        sql`
-          INSERT INTO pr_comments (pr_number, commit_sha, message, created_at, source, run_id, run_attempt)
-          VALUES (${prNumber}, ${commitSha}, ${message}, CURRENT_TIMESTAMP, ${source}, ${runId}, ${runAttempt})
-        `,
+        await client.query(
+          `INSERT INTO pr_comments (pr_number, commit_sha, message, created_at, source, run_id, run_attempt)
+           VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4, $5, $6)`,
+          [prNumber, commitSha, message, source, runId, runAttempt]
+        );
 
-        // Get ALL messages for the current commit SHA
-        // For each source, get the message from the latest run_attempt
-        sql`
-          WITH latest_runs AS (
+        const { rows: comments } = await client.query(
+          `WITH latest_runs AS (
             SELECT DISTINCT ON (source)
               id,
               message,
@@ -76,16 +71,14 @@ async function processWithRetry(params) {
               run_id,
               run_attempt
             FROM pr_comments
-            WHERE pr_number = ${prNumber}
-              AND commit_sha = ${commitSha}
+            WHERE pr_number = $1
+              AND commit_sha = $2
             ORDER BY source, run_id DESC, run_attempt DESC
           )
           SELECT * FROM latest_runs
-          ORDER BY created_at ASC
-        `
-      ]).then(async results => {
-        // Last query result contains our comments
-        const comments = results[results.length - 1];
+          ORDER BY created_at ASC`,
+          [prNumber, commitSha]
+        );
 
         const combinedMessage = [
           `### Automated Workflow Results for commit ${commitSha}`,
@@ -145,10 +138,17 @@ async function processWithRetry(params) {
           core.error(error.stack || error);
           throw error;
         }
-      });
 
-      // If we get here, everything worked
-      return;
+        await client.query('COMMIT');
+        await client.end(); // Close the connection
+        return;
+
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        await client.end(); // Make sure we always close the connection
+      }
 
     } catch (error) {
       // Check if it's a GitHub API error
